@@ -1,0 +1,94 @@
+# PanNuke Classical ML — Reproducible Environment
+# ─────────────────────────────────────────────────────────────────────────────
+# RAPIDS:  25.12   (upgraded from guide's 23.10 — see comparison table below)
+# Python:  3.11
+# CUDA:    12.x    (12.5+ recommended; 12.9 verified working in dev)
+#
+# WHY RAPIDS 25.12 > 23.10 for this project
+# ┌──────────────────────────────┬─────────────────────┬────────────────────────┐
+# │ Aspect                       │ RAPIDS 23.10        │ RAPIDS 25.12 ✅        │
+# ├──────────────────────────────┼─────────────────────┼────────────────────────┤
+# │ Python                       │ 3.10 only           │ 3.11 (faster CPython)  │
+# │ CUDA requirement             │ 11.8 / 12.0         │ 12.x  (all modern GPUs)│
+# │ NumPy compatibility          │ <1.25 (capped)      │ 2.x   (full support)   │
+# │ cuML RandomForest            │ baseline speed      │ faster split & predict │
+# │ cuDF                         │ Arrow 12            │ Arrow 18+ (faster I/O) │
+# │ sklearn API compatibility    │ partial estimator   │ full tag estimator API │
+# │ XGBoost bundled              │ 2.0.x               │ 3.1.x (GPU hist tree)  │
+# │ Cumulative bugfixes          │ —                   │ 18 monthly releases    │
+# └──────────────────────────────┴─────────────────────┴────────────────────────┘
+#
+# HOW TO REPRODUCE
+# ────────────────
+#   conda env create -f environment.yml --solver=libmamba   # recommended solver
+#   conda activate pannuke-ml
+#
+#   If libmamba is not installed:
+#     conda install -n base conda-libmamba-solver
+#     conda env create -f environment.yml --solver=libmamba
+#
+#   Pip-only packages are declared inline under the 'pip:' section below.
+#
+# NOTE: 'defaults' channel intentionally omitted.
+# RAPIDS conflicts with Anaconda defaults channel.
+# Source: https://docs.rapids.ai/install/#troubleshooting
+#
+# NOTE on python-spams (removed):
+#   conda's python-spams package requires numpy <2.0, which conflicts with
+#   RAPIDS 25.12 (numpy 2.x). SPAMS is only needed by staintools for
+#   method='sparse'. We use method='macenko' which uses SVD — no SPAMS needed.
+#   staintools is installed via pip (see pip section below).
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: pannuke-ml
+
+channels:
+  - rapidsai
+  - conda-forge
+  - nvidia
+  # 'defaults' intentionally omitted — conflicts with rapidsai packages
+
+dependencies:
+  # ── Python & CUDA ────────────────────────────────────────────────────────────
+  - python=3.11
+  - cuda-version=12.*            # any CUDA 12.x; RAPIDS 25.12 validated on 12.5–12.9
+
+  # ── RAPIDS metapackage ───────────────────────────────────────────────────────
+  # Installs: cuML 25.12, cuDF 25.12, CuPy 13.x, RMM, Dask-CUDA
+  # DO NOT pin numpy/scipy separately — let RAPIDS own these versions
+  - rapids=25.12
+
+  # ── Core ML (let conda pick compatible versions with RAPIDS numpy) ───────────
+  - scikit-learn>=1.5     # full tag estimator API; RFE + ExtraTrees
+  - lightgbm>=4.3         # GPU histogram; Python 3.11 wheels available
+  - xgboost>=2.1          # GPU hist backend (3.x bundled by RAPIDS anyway)
+  - imbalanced-learn>=0.12 # SMOTE; compatible with sklearn >=1.5
+  - optuna>=3.5           # Bayesian HPO with TPE sampler
+
+  # ── Image processing ─────────────────────────────────────────────────────────
+  - scikit-image>=0.22
+  - opencv>=4.8
+  - pillow>=10.0
+
+  # ── Utilities ────────────────────────────────────────────────────────────────
+  - matplotlib>=3.8       # debug visualizations and paper figures
+  - tqdm                  # progress bars in training loops
+  - jupyterlab>=4.0       # notebook environment
+
+  # ── Pip packages (numpy-2.x compatible, no conda equivalent) ─────────────────
+  - pip
+  - pip:
+      # Stain normalization — Macenko SVD method (no SPAMS required)
+      - staintools==2.1.2
+
+      # Minimum Redundancy Maximum Relevance feature selection
+      - mrmr-selection==0.2.8
+
+      # Dense CRF post-processing (pydensecrf 1.0rc3 broken on Py3.11;
+      # maintained fork with identical API)
+      - git+https://github.com/lucasb-eyer/pydensecrf.git
+
+      # Optional FastAPI inference server
+      # Build this LAST — only after all evaluation is complete
+      - fastapi==0.104.1
+      - uvicorn==0.24.0

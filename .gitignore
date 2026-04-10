@@ -1,0 +1,28 @@
+# ── Data (too large for git) ──────────────────────────────
+data/raw/
+data/processed/
+data/models/
+data/debug_samples/
+
+# ── Python bytecode ──────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Virtual environment ──────────────────────────────────
+.venv/
+
+# ── Jupyter checkpoints ──────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Large binary files ───────────────────────────────────
+*.npy
+*.joblib
+
+# ── Private guidance docs (not for public repo) ─────────
+feature_research.md
+memory-issues.txt
+ram-issues.txt
+pannuke_implementation_guide.md
+project_structure.md
+training_guide.md
