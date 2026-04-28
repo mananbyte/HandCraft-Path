@@ -310,8 +310,8 @@ pannuke-classical-ml/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-username>/pannuke-classical-ml.git
-cd pannuke-classical-ml
+git clone https://github.com/<your-username>/HandCraft-Path.git
+cd HandCraft-Path
 ```
 
 ### 2. Create the conda environment
@@ -324,7 +324,7 @@ conda install -n base conda-libmamba-solver
 conda env create -f environment.yml --solver=libmamba
 
 # Activate
-conda activate pannuke-ml
+conda activate HandCraft-Path
 ```
 
 ### 3. Verify GPU setup
@@ -431,7 +431,7 @@ All notebooks are designed to be run **after** the corresponding pipeline stage 
 Launch:
 
 ```bash
-conda activate pannuke-ml
+conda activate HandCraft-Path
 jupyter lab notebooks/
 ```
 
