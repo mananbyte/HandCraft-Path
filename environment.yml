@@ -1,4 +1,4 @@
-# PanNuke Classical ML — Reproducible Environment
+# PHandCraft-Path — Reproducible Environment
 # ─────────────────────────────────────────────────────────────────────────────
 # RAPIDS:  25.12   (upgraded from guide's 23.10 — see comparison table below)
 # Python:  3.11
@@ -21,7 +21,7 @@
 # HOW TO REPRODUCE
 # ────────────────
 #   conda env create -f environment.yml --solver=libmamba   # recommended solver
-#   conda activate pannuke-ml
+#   conda activate HandCraft-Path
 #
 #   If libmamba is not installed:
 #     conda install -n base conda-libmamba-solver
@@ -40,7 +40,7 @@
 #   staintools is installed via pip (see pip section below).
 # ─────────────────────────────────────────────────────────────────────────────
 
-name: pannuke-ml
+name: HandCraft-Path
 
 channels:
   - rapidsai
