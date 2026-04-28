@@ -19,10 +19,3 @@ __pycache__/
 *.npy
 *.joblib
 
-# ── Private guidance docs (not for public repo) ─────────
-feature_research.md
-memory-issues.txt
-ram-issues.txt
-pannuke_implementation_guide.md
-project_structure.md
-training_guide.md
