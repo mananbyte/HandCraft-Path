@@ -257,7 +257,7 @@ Pass 2 (slow, ~2-3 h):
 ## Repository Structure
 
 ```
-pannuke-classical-ml/
+HandCraft-Path/
 │
 ├── environment.yml                   # Pinned conda environment (RAPIDS 25.12)
 ├── README.md
