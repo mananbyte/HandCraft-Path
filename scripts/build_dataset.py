@@ -106,8 +106,30 @@ def main():
         help="Dense feature extraction backend (default: auto)"
     )
     parser.add_argument(
-        "--feature-batch-size", type=int, default=100,
-        help="Dense feature extraction batch size (default: 100)"
+        "--feature-batch-size", type=int, default=None,
+        help="Dense feature extraction batch size (default: auto-computed from available memory)"
+    )
+    
+    # ── NEW: Memory configuration arguments ──────────────────────────────────
+    parser.add_argument(
+        "--max-memory", type=float, default=None,
+        help="Maximum memory to use in GB (e.g., 8). Overrides auto-detection."
+    )
+    parser.add_argument(
+        "--memory-percent", type=float, default=None,
+        help="Use only this percentage of available memory (0-100). Useful for shared systems."
+    )
+    parser.add_argument(
+        "--memory-backend", choices=["auto", "cpu", "gpu"], default="auto",
+        help="Memory backend for size calculation (default: auto, GPU if available)"
+    )
+    parser.add_argument(
+        "--memory-safety-margin", type=float, default=25,
+        help="Safety margin as %% of detected memory (default: 25). Higher = more conservative."
+    )
+    parser.add_argument(
+        "--no-calibration", action="store_true",
+        help="Skip auto-calibration of per-image memory (faster but less accurate)"
     )
 
     args = parser.parse_args()
@@ -118,6 +140,7 @@ def main():
 
     # Import after optional env flags are set.
     from src.data.streaming_loader import build_dataset_memmap
+    from src.utils.memory_config import MemoryConfig
 
     fold_nums = [int(f.strip()) for f in args.folds.split(",")]
 
@@ -134,8 +157,6 @@ def main():
     print(f"  Folds: {fold_nums}")
     print(f"  Label mode: {args.label_mode}")
     print(f"  Pixels per class: {args.n_per_class}")
-    print(f"  Feature backend: {args.feature_backend}")
-    print(f"  Feature batch size: {args.feature_batch_size}")
     print(f"{'═'*60}\n")
 
     # Output paths
@@ -151,6 +172,15 @@ def main():
             print("Use --resume to continue, or delete the file to restart.")
             return
 
+    # ── NEW: Initialize memory configuration ──────────────────────────────
+    memory_config = MemoryConfig(
+        max_memory_gb=args.max_memory,
+        memory_percent=args.memory_percent,
+        safety_margin_pct=args.memory_safety_margin,
+        force_backend=args.memory_backend,
+        verbose=True,
+    )
+
     # Fit/load normalizer
     normalizer = fit_or_load_normalizer(fold_nums)
 
@@ -162,6 +192,24 @@ def main():
         assert os.path.exists(img_path), f"Missing: {img_path}"
         assert os.path.exists(mask_path), f"Missing: {mask_path}"
 
+    # ── NEW: Auto-calibrate per-image memory (if not disabled) ────────────
+    if not args.no_calibration:
+        try:
+            memory_config.calibrate_from_images(fold_dirs, n_calibrate_images=5)
+        except Exception as e:
+            print(f"⚠ Auto-calibration failed: {e}. Using conservative estimate.")
+    
+    # ── Compute optimal batch size ────────────────────────────────────────
+    feature_batch_size = memory_config.compute_batch_size(
+        feature_batch_size_override=args.feature_batch_size
+    )
+
+    # Print memory summary
+    memory_config.print_summary()
+
+    print(f"  Feature backend: {args.feature_backend}")
+    print(f"  Computed batch size: {feature_batch_size}\n")
+
     # Build dataset
     build_dataset_memmap(
         fold_dirs=fold_dirs,
@@ -172,7 +220,8 @@ def main():
         checkpoint_path=ckpt_path,
         n_per_class=args.n_per_class,
         feature_backend=args.feature_backend,
-        feature_batch_size=args.feature_batch_size,
+        feature_batch_size=feature_batch_size,
+        memory_config=memory_config,
     )
 
 

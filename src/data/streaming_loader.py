@@ -211,7 +211,8 @@ def build_dataset_memmap(
         checkpoint_path, n_per_class=400,
     checkpoint_every=CHECKPOINT_EVERY,
     feature_backend="auto",
-    feature_batch_size=100):
+    feature_batch_size=100,
+    memory_config=None):
     """
     Streaming feature extraction with memmap + checkpoint/resume.
 
@@ -227,11 +228,22 @@ def build_dataset_memmap(
     checkpoint_every : int — save checkpoint every N images
     feature_backend : str — 'auto' | 'cpu' | 'gpu'
     feature_batch_size : int — images per dense-feature extraction batch
+    memory_config : MemoryConfig, optional
+        Memory configuration object (if not provided, fallback to feature_batch_size)
 
     Returns
     -------
     X_mm, y_mm : np.ndarray (memmap views, possibly truncated)
     """
+    # ── Log memory configuration (if provided) ────────────────────────
+    if memory_config is not None:
+        print(f"\nMemory configuration:")
+        print(f"  Backend: {memory_config.get_backend().upper()}")
+        print(f"  Usable memory: {memory_config.usable_memory_gb:.2f} GB")
+        if memory_config._calibrated:
+            print(f"  Per-image (calibrated): {memory_config.actual_per_image_mb:.1f} MB")
+        print()
+
     # ── Check for existing checkpoint ─────────────────────────────────
     ckpt = load_checkpoint(checkpoint_path)
 
