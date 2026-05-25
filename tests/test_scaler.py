@@ -41,9 +41,10 @@ def synthetic_npy(tmp_path):
 def test_get_all_scaler_types():
     types = get_all_scaler_types()
     assert isinstance(types, list)
-    assert len(types) == 5
+    assert len(types) == 6
     assert "RobustScaler" in types
     assert "StandardScaler" in types
+    assert "HandCraftPathScaler" in types
 
 
 def test_invalid_scaler_type_raises():

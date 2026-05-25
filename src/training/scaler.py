@@ -29,12 +29,63 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from src.utils.safe_loader import safe_load_npy
 
 # ── Module-level constants ─────────────────────────────────────────────────
-DEFAULT_SCALER_TYPE: str = "RobustScaler"
+DEFAULT_SCALER_TYPE: str = "HandCraftPathScaler"
 DEFAULT_SAMPLE_N: int = 200_000
 DEFAULT_CHUNK_SIZE: int = 50_000
 RANDOM_STATE: int = 42
 
 # Map string keys → sklearn classes (keeps config readable in CLI args)
+class HandCraftPathScaler:
+    GROUPS = [
+        # (start, end, scaler_type)
+        (0,   3,   'robust'),       # OD
+        (3,   57,  'standard'),     # LAB + HSV + HED color stats
+        (57,  60,  'pass'),         # LBP — already [0,1]
+        (60,  72,  'robust'),       # Gabor
+        (72,  74,  'robust'),       # Sobel X, Y
+        (74,  75,  'power'),        # Gradient magnitude
+        (75,  77,  'robust'),       # LoG σ=2, σ=4
+        (77,  79,  'power'),        # Structure tensor λ1, λ2
+        (79,  80,  'pass'),         # Anisotropy — already [0,1]
+        (80,  83,  'standard'),     # DoG
+        (83,  85,  'standard'),     # Superpixel context
+        (85,  87,  'pass'),         # Entropy, edge distance — already [0,1]
+        (87,  88,  'power'),        # GLCM contrast
+        (88,  89,  'robust'),       # GLCM dissimilarity
+        (89,  92,  'pass'),         # GLCM homogeneity, energy, ASM — [0,1]
+        (92,  93,  'standard'),     # GLCM correlation
+    ]
+
+    def __init__(self):
+        self.scalers = {}
+        self.fitted  = False
+
+    def fit(self, X):
+        assert X.shape[1] == 93, f"Expected 93 features, got {X.shape[1]}"
+        for start, end, kind in self.GROUPS:
+            if kind == 'pass':
+                continue
+            elif kind == 'standard':
+                s = StandardScaler()
+            elif kind == 'robust':
+                s = RobustScaler(quantile_range=(5, 95))
+            elif kind == 'power':
+                s = PowerTransformer(method='yeo-johnson', standardize=True)
+            s.fit(X[:, start:end])
+            self.scalers[(start, end)] = s
+        self.fitted = True
+        return self
+
+    def transform(self, X):
+        assert self.fitted
+        out = X.copy().astype(np.float32)
+        for start, end, kind in self.GROUPS:
+            if kind == 'pass':
+                continue
+            out[:, start:end] = \
+                self.scalers[(start, end)].transform(X[:, start:end])
+        return out
+
 SCALER_REGISTRY: dict = {
     "StandardScaler": StandardScaler,
     "RobustScaler": RobustScaler,
@@ -45,6 +96,7 @@ SCALER_REGISTRY: dict = {
         output_distribution="normal", random_state=RANDOM_STATE, n_quantiles=1000
     ),
     "PowerTransformer": PowerTransformer,  # Yeo-Johnson by default; handles negatives
+    "HandCraftPathScaler": HandCraftPathScaler,
 }
 
 logger = logging.getLogger(__name__)
