@@ -50,7 +50,7 @@ from src.training.feature_selection import (
 from src.utils.safe_loader import safe_load_npy
 
 # ── Constants ──────────────────────────────────────────────────────────────
-RSS_LIMIT_MB: float = 500.0
+RSS_LIMIT_MB: float = 3000.0
 PROCESSED_DIR: str = "data/processed"
 MODELS_DIR: str = "data/models"
 SELECTION_SAMPLE_N: int = 100_000   # subsample for feature selection (fit already done)
@@ -180,8 +180,8 @@ def main() -> None:
 
     # Load scaled binary matrix subsample for selection
     scaled_path = binary_X_scaled if os.path.exists(binary_X_scaled) else binary_X_path
-    X_mm = safe_load_npy(scaled_path, mmap_mode="r")
-    y_mm = safe_load_npy(binary_y_path, mmap_mode="r")
+    X_mm = safe_load_npy(scaled_path, mode="r")
+    y_mm = safe_load_npy(binary_y_path, mode="r")
 
     n_total = X_mm.shape[0]
     actual_n = min(SELECTION_SAMPLE_N, n_total)

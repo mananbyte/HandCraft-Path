@@ -22,6 +22,18 @@ from sklearn.feature_selection import f_classif, SelectKBest, RFE
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, classification_report
 
+try:
+    from cuml.linear_model import LogisticRegression as GPULogisticRegression
+    HAS_CUML = True
+except ImportError:
+    HAS_CUML = False
+
+def get_logistic_regression(max_iter=500, random_state=42):
+    if HAS_CUML:
+        return GPULogisticRegression(max_iter=max_iter)
+    else:
+        return LogisticRegression(max_iter=max_iter, random_state=random_state, n_jobs=-1)
+
 from src.utils.safe_loader import safe_load_npy
 
 # ── Module-level constants ────────────────────────────────────────────────
@@ -156,7 +168,7 @@ def main():
     
     # 3. Baseline Model (Full 93 features)
     print("\nTraining Baseline Logistic Regression on full feature set...")
-    lr_full = LogisticRegression(max_iter=1000, random_state=42, n_jobs=-1)
+    lr_full = get_logistic_regression(max_iter=1000, random_state=42)
     lr_full.fit(X_train_scaled, y_train)
     y_pred_full = lr_full.predict(X_val_scaled)
     baseline_f1 = f1_score(y_val, y_pred_full, average='macro')
@@ -171,7 +183,7 @@ def main():
     mrmr_names = [feature_names[i] for i in mrmr_indices]
     
     # Train & evaluate on mRMR features
-    lr_mrmr = LogisticRegression(max_iter=1000, random_state=42, n_jobs=-1)
+    lr_mrmr = get_logistic_regression(max_iter=1000, random_state=42)
     lr_mrmr.fit(X_train_scaled[:, mrmr_indices], y_train)
     y_pred_mrmr = lr_mrmr.predict(X_val_scaled[:, mrmr_indices])
     mrmr_f1 = f1_score(y_val, y_pred_mrmr, average='macro')
@@ -184,7 +196,7 @@ def main():
     anova_indices = np.argsort(np.nan_to_num(anova_selector.scores_))[::-1][:k_features]
     anova_names = [feature_names[i] for i in anova_indices]
     
-    lr_anova = LogisticRegression(max_iter=1000, random_state=42, n_jobs=-1)
+    lr_anova = get_logistic_regression(max_iter=1000, random_state=42)
     lr_anova.fit(X_train_scaled[:, anova_indices], y_train)
     y_pred_anova = lr_anova.predict(X_val_scaled[:, anova_indices])
     anova_f1 = f1_score(y_val, y_pred_anova, average='macro')
@@ -193,7 +205,7 @@ def main():
     # C. RFE (Recursive Feature Elimination with Logistic Regression)
     print(f"\nRunning RFE to select top-{k_features} features...")
     # Using a fast estimator for RFE
-    rfe_estimator = LogisticRegression(max_iter=500, random_state=42, n_jobs=-1)
+    rfe_estimator = get_logistic_regression(max_iter=500, random_state=42)
     rfe_selector = RFE(estimator=rfe_estimator, n_features_to_select=k_features, step=5)
     rfe_selector.fit(X_train_scaled, y_train)
     rfe_indices = np.where(rfe_selector.support_)[0]
@@ -202,7 +214,7 @@ def main():
     sorted_rfe_indices = rfe_indices[np.argsort(rfe_rankings)]
     rfe_names = [feature_names[i] for i in sorted_rfe_indices]
     
-    lr_rfe = LogisticRegression(max_iter=1000, random_state=42, n_jobs=-1)
+    lr_rfe = get_logistic_regression(max_iter=1000, random_state=42)
     lr_rfe.fit(X_train_scaled[:, rfe_indices], y_train)
     y_pred_rfe = lr_rfe.predict(X_val_scaled[:, rfe_indices])
     rfe_f1 = f1_score(y_val, y_pred_rfe, average='macro')
@@ -319,9 +331,7 @@ def run_feature_selection(
 
     elif method == "rfe":
         logger.info("Running RFE (n=%d)...", n_features)
-        estimator = LogisticRegression(
-            max_iter=500, random_state=random_state, n_jobs=-1
-        )
+        estimator = get_logistic_regression(max_iter=500, random_state=random_state)
         selector = RFE(
             estimator=estimator, n_features_to_select=n_features, step=5
         )
