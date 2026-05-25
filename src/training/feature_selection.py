@@ -1,12 +1,19 @@
 """
-Feature selection prototype for PanNuke classification.
-Implements mRMR, ANOVA, and RFE, compares them with a Logistic Regression baseline,
-and saves the selected features.
+Feature selection module for HandCraft-Path pixel classification.
+
+Implements mRMR (custom), ANOVA (SelectKBest), and RFE.
+Provides a unified run_feature_selection() dispatch entry point
+and save_selected_features() artefact persistence used by the
+production standardization script.
+
+All random operations use random_state=42 for reproducibility.
 """
 
 import os
 import re
 import ast
+import json
+import logging
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -15,35 +22,14 @@ from sklearn.feature_selection import f_classif, SelectKBest, RFE
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, classification_report
 
-# ── Safe loading for NumPy 2.x saved npy files ────────────────────────────
-def safe_load_npy(filepath):
-    with open(filepath, 'rb') as f:
-        magic = f.read(6)
-        if magic != b'\x93NUMPY':
-            raise ValueError("Not a numpy file")
-        major = f.read(1)[0]
-        minor = f.read(1)[0]
-        if major == 1:
-            header_len = int.from_bytes(f.read(2), byteorder='little')
-            header_start = 10
-        elif major == 2:
-            header_len = int.from_bytes(f.read(4), byteorder='little')
-            header_start = 12
-        else:
-            raise ValueError(f"Unsupported numpy version {major}.{minor}")
-        header_bytes = f.read(header_len)
-        header_str = header_bytes.decode('ascii').strip()
-        
-        # Repair the header string (handle np.int64 serialization issues in NumPy 2.x)
-        header_str = re.sub(r'(?:numpy\.|np\.)?int(?:64|32)?\(([0-9]+)\)', r'\1', header_str)
-        header_str = re.sub(r'(?:numpy\.)?dtype\([\'"]([^\'"]+)[\'"]\)', r"'\1'", header_str)
-        
-        header_dict = ast.literal_eval(header_str)
-        shape = header_dict['shape']
-        fortran_order = header_dict['fortran_order']
-        dtype = np.dtype(header_dict['descr'])
-        
-    return np.memmap(filepath, dtype=dtype, mode='r', offset=header_start + header_len, shape=shape, order='F' if fortran_order else 'C')
+from src.utils.safe_loader import safe_load_npy
+
+# ── Module-level constants ────────────────────────────────────────────────
+RANDOM_STATE: int = 42
+DEFAULT_N_FEATURES: int = 20  # overridden by notebook elbow analysis
+SUPPORTED_METHODS: list = ["mrmr", "anova", "rfe"]
+
+logger = logging.getLogger(__name__)
 
 
 # ── Feature Names Generator ──────────────────────────────────────────────
@@ -275,6 +261,139 @@ This report compares three feature selection methods (mRMR, ANOVA, RFE) on the P
     with open('feature_selection_report.md', 'w') as f:
         f.write(report_content)
     print("Saved evaluation report to 'feature_selection_report.md'")
+
+
+# ── Unified Entry Point ───────────────────────────────────────────────────
+def run_feature_selection(
+    X_scaled: np.ndarray,
+    y: np.ndarray,
+    n_features: int = DEFAULT_N_FEATURES,
+    method: str = "mrmr",
+    random_state: int = RANDOM_STATE,
+) -> tuple[list[int], list[str]]:
+    """
+    Unified feature selection dispatch.
+
+    Parameters
+    ----------
+    X_scaled : np.ndarray, shape (N, 93)
+        Standardized feature matrix (already fitted+transformed).
+    y : np.ndarray, shape (N,)
+        Label vector.
+    n_features : int
+        Number of features to select. Determined by notebook elbow analysis.
+    method : str
+        One of 'mrmr', 'anova', 'rfe'.
+    random_state : int
+        Reproducibility seed.
+
+    Returns
+    -------
+    indices : list[int]
+        Selected feature indices (0-based, into the 93-column space).
+    names : list[str]
+        Corresponding feature name strings from get_feature_names().
+    """
+    assert method in SUPPORTED_METHODS, (
+        f"Unknown method '{method}'. Choose from: {SUPPORTED_METHODS}"
+    )
+    assert X_scaled.ndim == 2, f"Expected 2-D array, got {X_scaled.shape}"
+    assert y.ndim == 1, f"Expected 1-D label array, got {y.shape}"
+    assert n_features > 0 and n_features <= X_scaled.shape[1], (
+        f"n_features={n_features} out of range [1, {X_scaled.shape[1]}]"
+    )
+
+    feature_names = get_feature_names()
+
+    if method == "mrmr":
+        logger.info("Running mRMR selection (n=%d)...", n_features)
+        indices = mrmr_selection(X_scaled, y, k=n_features)
+
+    elif method == "anova":
+        logger.info("Running ANOVA SelectKBest (n=%d)...", n_features)
+        selector = SelectKBest(f_classif, k=n_features)
+        selector.fit(X_scaled, y)
+        indices = list(
+            np.argsort(np.nan_to_num(selector.scores_))[::-1][:n_features]
+        )
+
+    elif method == "rfe":
+        logger.info("Running RFE (n=%d)...", n_features)
+        estimator = LogisticRegression(
+            max_iter=500, random_state=random_state, n_jobs=-1
+        )
+        selector = RFE(
+            estimator=estimator, n_features_to_select=n_features, step=5
+        )
+        selector.fit(X_scaled, y)
+        rfe_indices = np.where(selector.support_)[0]
+        # Order by RFE ranking (rank 1 = best)
+        sorted_idx = rfe_indices[np.argsort(selector.ranking_[rfe_indices])]
+        indices = list(sorted_idx)
+
+    names = [feature_names[i] for i in indices]
+    logger.info(
+        "run_feature_selection complete: method=%s, n=%d, first_5=%s",
+        method, n_features, names[:5]
+    )
+    return indices, names
+
+
+# ── Artefact Persistence ──────────────────────────────────────────────────
+def save_selected_features(
+    indices: list[int],
+    names: list[str],
+    method: str,
+    n: int,
+    out_dir: str = "data/models",
+) -> dict[str, str]:
+    """
+    Persists selected feature list as JSON (for programmatic loading)
+    and CSV (for human inspection).
+
+    Parameters
+    ----------
+    indices : list[int]
+        Selected feature column indices.
+    names : list[str]
+        Feature name strings.
+    method : str
+        Selection method used (used in filename).
+    n : int
+        Number of features selected (used in filename).
+    out_dir : str
+        Directory to write artefacts into.
+
+    Returns
+    -------
+    paths : dict[str, str]
+        Dictionary with keys 'json' and 'csv' pointing to written files.
+    """
+    assert len(indices) == len(names) == n, (
+        f"indices/names length mismatch: {len(indices)} vs {len(names)} vs n={n}"
+    )
+    os.makedirs(out_dir, exist_ok=True)
+
+    stem = f"selected_features_{method}_{n}"
+    json_path = os.path.join(out_dir, f"{stem}.json")
+    csv_path = os.path.join(out_dir, f"{stem}.csv")
+
+    payload = {
+        "method": method,
+        "n_features": n,
+        "indices": [int(i) for i in indices],   # cast np.int64 → int for JSON
+        "names": names,
+    }
+    with open(json_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+
+    df = pd.DataFrame({"rank": range(1, n + 1), "index": indices, "name": names})
+    df.to_csv(csv_path, index=False)
+
+    logger.info("Saved selected features → %s, %s", json_path, csv_path)
+    print(f"  ✓ Feature list written: {json_path}")
+    print(f"  ✓ Feature CSV written:  {csv_path}")
+    return {"json": json_path, "csv": csv_path}
 
 
 if __name__ == "__main__":
