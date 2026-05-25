@@ -20,5 +20,8 @@ __pycache__/
 *.npy
 *.joblib
 
-.opencode/
 docs/
+
+# ── GSD planning (local dev only — not for repo) ─────────
+.planning/
+.antigravitycli/
