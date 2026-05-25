@@ -625,7 +625,7 @@ Both experiments use identical feature extraction — only the label space diffe
 
 We implemented a robust two-stage standardization and feature selection pipeline in **Phase 3**:
 1. **Multi-Group Standardization**: Developed a custom **`HandCraftPathScaler`** that divides the 93 handcrafted features into 4 optimal groups (Passthrough, StandardScaler, RobustScaler(5, 95), and Yeo-Johnson PowerTransformer) to handle extreme scale differences (0.4 to 10,000+) and suppress staining outliers by **69%** (outlier fraction down to **`0.46%`**).
-2. **Recursive Feature Elimination (RFE)**: Designed a GPU-accelerated **RFE** selector using **cuML** that sweeps $n \in \{10..30\}$ and uses proxy model elbow-point logic to select the definitive **$n=25$ features** on the GPU in **under 50 seconds** (a 12x speedup over CPU). Using only 25 features achieves **0.8681** Macro-F1, matching the full 93 baseline features within 0.0018 margin while slashing downstream complexity by **73%**!
+2. **Recursive Feature Elimination (RFE)**: Designed a GPU-accelerated **RFE** selector using **cuML** that sweeps $n \in \{10..30\}$ and uses proxy model elbow-point logic to select the definitive **$n=25$ features** on the GPU in **under 50 seconds** (a 12x speedup over CPU). Using only 25 features achieves **0.8643** Macro-F1, matching the full 93 baseline features within 0.0059 margin while slashing downstream complexity by **73%**!
 
 ---
 
