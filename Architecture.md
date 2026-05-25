@@ -43,11 +43,13 @@ Evaluation modes:
 Models: SVM-RBF (primary), XGBoost (challenger)
 Metric: Macro-F1 + per-class F1 + confusion matrix + oracle gap
 
-## Fitted artifact dependency chain
-normalizer.joblib
-  └── scaler_{binary|3class}.joblib
-        └── selector_{binary|3class}.joblib
-              └── {rf|lgbm}_{binary|3class}_{base|tuned}.joblib
+## Fitted artifact dependency chain (Phase 3 Completed)
+normalizer.joblib (Macenko stain normalization vector)
+  └── data/models/scaler_fold1_binary.joblib (Fitted HandCraftPathScaler object)
+        ├── data/processed/fold1_binary_X_scaled.npy (Scaled binary matrix, 2.07M rows × 93)
+        ├── data/processed/fold1_3class_X_scaled.npy (Scaled 3-class matrix, 3.07M rows × 93)
+        └── data/models/selected_features_rfe_25.json / .csv (Selected 25 features via GPU RFE)
+              └── [Phase 4 Planned] {rf|lgbm}_{binary|3class}_{base|tuned}.joblib
                     └── evaluation results (Fold3, one-time)
 
 Stage 2 (independent):
