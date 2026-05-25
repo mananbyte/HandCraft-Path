@@ -25,3 +25,7 @@ docs/
 # ── GSD planning (local dev only — not for repo) ─────────
 .planning/
 .antigravitycli/
+
+# ── AI assistant tooling (Antigravity/Gemini session files) ─
+GEMINI.md
+gemini-brain/

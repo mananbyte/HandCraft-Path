@@ -307,6 +307,9 @@ def compute_glcm_for_patch(gray_patch):
     GLCM statistics for a single 15×15 patch.
     Returns 1D array of 6 features (mean across 4 angles).
     """
+    if gray_patch.size < 9:
+        return np.zeros(6, dtype=np.float32)
+
     if gray_patch.max() <= 1.0:
         gray_uint = (gray_patch * 255).astype(np.uint8)
     else:
@@ -331,7 +334,7 @@ def compute_glcm_for_patch(gray_patch):
 
 def compute_glcm_for_samples(gray_image, flat_indices, patch_radius=7):
     """
-    Compute GLCM features for a set of sampled pixel indices.
+    Compute GLCM features for a set of sampled pixel indices in parallel.
 
     Parameters
     ----------
@@ -347,8 +350,9 @@ def compute_glcm_for_samples(gray_image, flat_indices, patch_radius=7):
     rows = flat_indices // W
     cols = flat_indices % W
     n = len(flat_indices)
-    result = np.zeros((n, GLCM_FEATURES), dtype=np.float32)
 
+    # Pre-extract patch slices
+    patches = []
     for i in range(n):
         r, c = rows[i], cols[i]
         r0 = max(0, r - patch_radius)
@@ -356,11 +360,15 @@ def compute_glcm_for_samples(gray_image, flat_indices, patch_radius=7):
         c0 = max(0, c - patch_radius)
         c1 = min(W, c + patch_radius + 1)
         patch = gray_image[r0:r1, c0:c1]
-        if patch.size < 9:  # too small for meaningful GLCM
-            continue
-        result[i] = compute_glcm_for_patch(patch)
+        patches.append(patch)
 
-    return result
+    from joblib import Parallel, delayed
+    # Run GLCM computations in parallel across all CPU cores using thread pool (Cython releases GIL)
+    results = Parallel(n_jobs=-1, backend="threading")(
+        delayed(compute_glcm_for_patch)(p) for p in patches
+    )
+
+    return np.array(results, dtype=np.float32)
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -423,12 +431,47 @@ def extract_all_features(image_uint8):
 # ASSEMBLY — Batch GPU path (for training)
 # ═════════════════════════════════════════════════════════════════════════
 
+def _extract_cpu_features_single(spaces, color_feats, gradient_feats):
+    """Compute CPU-intensive dense features for a single image and assemble."""
+    gray = spaces['lab'][:, :, 0].astype(np.float32)
+
+    od_feats    = compute_od_features(spaces['rgb'])   # (H,W,3)
+    lbp_feats   = compute_lbp_features(gray)                   # (H,W,3)
+    gabor_feats = compute_gabor_features(gray)                 # (H,W,12)
+    struct_feats = compute_structure_tensor_features(gray)      # (H,W,3)
+    dog_feats   = compute_dog_features(gray)                   # (H,W,3)
+    sp_feats    = compute_superpixel_features(spaces)          # (H,W,2)
+    ent_feats   = compute_entropy_feature(gray)                # (H,W,1)
+    edge_feats  = compute_edge_distance()                      # (H,W,1)
+
+    all_feats = np.concatenate([
+        od_feats,                     # 3
+        color_feats,                  # 54
+        lbp_feats,                    # 3
+        gabor_feats,                  # 12
+        gradient_feats,               # 5
+        struct_feats,                 # 3
+        dog_feats,                    # 3
+        sp_feats,                     # 2
+        ent_feats,                    # 1
+        edge_feats,                   # 1
+    ], axis=-1)                       # (256, 256, 87)
+
+    features = all_feats.reshape(-1, DENSE_FEATURES)
+    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+    return features.astype(np.float32)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# ASSEMBLY — Batch GPU path (for training)
+# ═════════════════════════════════════════════════════════════════════════
+
 def extract_features_batch_gpu(images_uint8, batch_size=32, log_progress=True):
     """
     GPU-accelerated feature extraction for a batch of images.
 
     Batches GPU-friendly ops (windowed stats, LoG) while running
-    CPU-only ops (LBP, Gabor, SLIC) per-image.
+    CPU-only ops (LBP, Gabor, SLIC) per-image in parallel.
 
     Parameters
     ----------
@@ -466,35 +509,14 @@ def extract_features_batch_gpu(images_uint8, batch_size=32, log_progress=True):
         )
         gradient_feats_list = compute_gradient_features_batch_gpu(gray_batch)
 
-        # CPU per-image: remaining features
-        for i in range(B):
-            gray = spaces_list[i]['lab'][:, :, 0].astype(np.float32)
-
-            od_feats    = compute_od_features(spaces_list[i]['rgb'])   # (H,W,3)
-            lbp_feats   = compute_lbp_features(gray)                   # (H,W,3)
-            gabor_feats = compute_gabor_features(gray)                 # (H,W,12)
-            struct_feats = compute_structure_tensor_features(gray)      # (H,W,3)
-            dog_feats   = compute_dog_features(gray)                   # (H,W,3)
-            sp_feats    = compute_superpixel_features(spaces_list[i])  # (H,W,2)
-            ent_feats   = compute_entropy_feature(gray)                # (H,W,1)
-            edge_feats  = compute_edge_distance()                      # (H,W,1)
-
-            all_feats = np.concatenate([
-                od_feats,                     # 3
-                color_feats_list[i],          # 54
-                lbp_feats,                    # 3
-                gabor_feats,                  # 12
-                gradient_feats_list[i],       # 5
-                struct_feats,                 # 3
-                dog_feats,                    # 3
-                sp_feats,                     # 2
-                ent_feats,                    # 1
-                edge_feats,                   # 1
-            ], axis=-1)                       # (256, 256, 87)
-
-            features = all_feats.reshape(-1, DENSE_FEATURES)
-            features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
-            all_features.append(features.astype(np.float32))
+        # CPU per-image: remaining features (in parallel across available cores!)
+        from joblib import Parallel, delayed
+        batch_features = Parallel(n_jobs=-1, backend="threading")(
+            delayed(_extract_cpu_features_single)(
+                spaces_list[i], color_feats_list[i], gradient_feats_list[i]
+            ) for i in range(B)
+        )
+        all_features.extend(batch_features)
 
         if log_progress and (batch_end % 100 == 0 or batch_end == N):
             print(f"  Feature extraction: {batch_end}/{N} images")
