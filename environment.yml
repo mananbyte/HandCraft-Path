@@ -74,6 +74,8 @@ dependencies:
   - matplotlib>=3.8       # debug visualizations and paper figures
   - tqdm                  # progress bars in training loops
   - jupyterlab>=4.0       # notebook environment
+  - seaborn>=0.13         # notebook environment
+  - jupyter-resource-usage>=0.4.1   # To track resource usage in notebooks
 
   # ── Pip packages (numpy-2.x compatible, no conda equivalent) ─────────────────
   - pip

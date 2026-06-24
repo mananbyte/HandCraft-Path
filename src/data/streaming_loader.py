@@ -258,14 +258,11 @@ def build_dataset_memmap(
         resume_image_idx = ckpt['last_completed_image_idx'] + 1
         write_ptr = ckpt['write_ptr']
 
-        X_mm = np.lib.format.open_memmap(
-            output_X_path, mode='r+', dtype=np.float32,
-            shape=(total_allocated, TOTAL_FEATURES)
-        )
-        y_mm = np.lib.format.open_memmap(
-            output_y_path, mode='r+', dtype=np.uint8,
-            shape=(total_allocated,)
-        )
+        from src.utils.safe_loader import safe_load_npy
+        X_mm = safe_load_npy(output_X_path, mode='r+')
+        y_mm = safe_load_npy(output_y_path, mode='r+')
+        assert X_mm.shape == (total_allocated, TOTAL_FEATURES), f"Resumed X shape mismatch: {X_mm.shape}"
+        assert y_mm.shape == (total_allocated,), f"Resumed y shape mismatch: {y_mm.shape}"
 
     else:
         print("═══ Starting fresh ═══")
