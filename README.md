@@ -612,14 +612,14 @@ Two parallel experiments test the effect of label granularity:
 
 Both experiments use identical feature extraction — only the label space differs.
 
-### Planned Classifiers
+### Implemented Classifiers
 
-| Classifier | Library | Notes |
+| Classifier | Library | Role |
 |-----------|---------|-------|
-| Random Forest | cuML (GPU) | Baseline, scale-invariant |
-| XGBoost | XGBoost GPU | Gradient boosting |
-| LightGBM | LightGBM GPU | Fast histogram trees |
-| SVM-RBF | scikit-learn | After GroupAwareScaler normalization |
+| Random Forest | cuML (GPU) | Scale-invariant baseline (used in ensemble) |
+| XGBoost | XGBoost GPU | Gradient boosting (used in ensemble) |
+| LightGBM | LightGBM GPU | Fast histogram trees (used in ensemble) |
+| SoftVotingEnsemble | Custom | Weighted blending of the above three |
 
 ### Feature Selection & Standardization (Completed)
 
@@ -627,18 +627,35 @@ We implemented a robust two-stage standardization and feature selection pipeline
 1. **Multi-Group Standardization**: Developed a custom **`HandCraftPathScaler`** that divides the 93 handcrafted features into 4 optimal groups (Passthrough, StandardScaler, RobustScaler(5, 95), and Yeo-Johnson PowerTransformer) to handle extreme scale differences (0.4 to 10,000+) and suppress staining outliers by **69%** (outlier fraction down to **`0.46%`**).
 2. **Recursive Feature Elimination (RFE)**: Designed a GPU-accelerated **RFE** selector using **cuML** that sweeps $n \in \{10..30\}$ and uses proxy model elbow-point logic to select the definitive **$n=25$ features** on the GPU in **under 50 seconds** (a 12x speedup over CPU). Using only 25 features achieves **0.8643** Macro-F1, matching the full 93 baseline features within 0.0059 margin while slashing downstream complexity by **73%**!
 
+### Memory-Safe Ensemble Training (Completed)
+
+To handle memory constraints (15 GB system RAM) during training on 2+ million rows in **Phase 4**:
+- **Two-Pass Architecture**: Models are fitted and validated sequentially (cuML RF -> LGBM -> XGBoost) with aggressive garbage collection.
+- **CPU FIL Inference**: Bypassed a severe memory leak caused by `cuML`'s Forest Inference Library (FIL) trying to allocate excessive VRAM when multiple models were loaded. `cuML` inference was shifted to `cpu_forest.predict()` with zero degradation in accuracy.
+
 ---
 
-## Results (Planned)
+## Results
 
-*This section will be updated as experiments complete.*
+*Experiment A (Binary) is complete. Experiment B (3-Class) is planned.*
 
-| Experiment | Classifier | IoU | F1 (nucleus) | Boundary F1 |
-|-----------|-----------|-----|-------------|------------|
-| Exp A Binary | Random Forest | TBD | TBD | — |
-| Exp A Binary | XGBoost | TBD | TBD | — |
-| Exp B 3-Class | Random Forest | TBD | TBD | TBD |
-| Exp B 3-Class | LightGBM | TBD | TBD | TBD |
+**Experiment A: Binary Segmentation (Fold 2 Validation)**
+
+| Classifier | Library | Macro-F1 | Ensemble Weight |
+|-----------|---------|----------|-----------------|
+| Random Forest | cuML | 0.8769 | 0.00 |
+| XGBoost | XGBoost | 0.8798 | 0.40 |
+| LightGBM | LightGBM | 0.8800 | 0.60 |
+| **Ensemble** | **Custom** | **0.8802** | **—** |
+
+*Note: The weight simplex grid search determined the optimal combination of models for the highest macro-F1.*
+
+**Experiment B: 3-Class Segmentation (Planned)**
+
+| Classifier | IoU | F1 (nucleus) | Boundary F1 |
+|-----------|-----|-------------|------------|
+| Random Forest | TBD | TBD | TBD |
+| LightGBM | TBD | TBD | TBD |
 
 ---
 

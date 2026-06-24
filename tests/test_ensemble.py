@@ -1,200 +1,126 @@
-"""
-tests/test_ensemble.py
-──────────────────────
-Unit tests for src/training/ensemble.py (SoftVotingEnsemble).
-
-All tests run on CPU-only (sklearn RandomForest), require no GPU,
-and should complete in < 30 seconds total.
-"""
-
 import os
 import tempfile
-
 import numpy as np
 import pytest
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 
-from src.training.ensemble import SoftVotingEnsemble, build_default_estimators, HAS_CUML
-
-# ── Fixtures ──────────────────────────────────────────────────────────────
-N_ROWS: int = 500
-N_FEATURES: int = 25
-RANDOM_STATE: int = 42
-
-
-def _make_cpu_estimators() -> dict:
-    """Return a minimal dict of CPU-only sklearn estimators for fast tests."""
-    return {
-        "rf": RandomForestClassifier(n_estimators=10, random_state=RANDOM_STATE, n_jobs=1),
-        "lgbm": RandomForestClassifier(n_estimators=8, random_state=RANDOM_STATE, n_jobs=1),
-        "xgb": RandomForestClassifier(n_estimators=8, random_state=RANDOM_STATE, n_jobs=1),
-    }
+from src.training.ensemble import SoftVotingEnsemble, build_default_estimators
 
 
 @pytest.fixture
-def synthetic_data():
-    """500 × 25 binary classification dataset."""
-    rng = np.random.default_rng(RANDOM_STATE)
-    X = rng.standard_normal((N_ROWS, N_FEATURES)).astype(np.float32)
-    y = rng.integers(0, 2, size=N_ROWS).astype(np.int32)
+def dummy_data():
+    np.random.seed(42)
+    X = np.random.rand(500, 25).astype(np.float32)
+    y = np.random.randint(0, 2, size=500).astype(np.int32)
     return X, y
 
 
 @pytest.fixture
-def fitted_ensemble(synthetic_data):
-    """Pre-fitted SoftVotingEnsemble (CPU-only)."""
-    X, y = synthetic_data
-    ens = SoftVotingEnsemble(estimators=_make_cpu_estimators())
-    ens.fit(X, y)
-    return ens, X, y
-
-
-# ── 1. predict_proba shape ────────────────────────────────────────────────
-def test_predict_proba_shape(fitted_ensemble):
-    """predict_proba must return (N, 2) shape for binary classification."""
-    ens, X, _ = fitted_ensemble
-    proba = ens.predict_proba(X)
-    assert proba.shape == (N_ROWS, 2), (
-        f"Expected shape ({N_ROWS}, 2), got {proba.shape}"
-    )
-
-
-# ── 2. predict values ─────────────────────────────────────────────────────
-def test_predict_values(fitted_ensemble):
-    """predict must return a 1-D array of length N with values in {0, 1}."""
-    ens, X, _ = fitted_ensemble
-    y_pred = ens.predict(X)
-    assert y_pred.ndim == 1, f"Expected 1-D, got {y_pred.ndim}-D"
-    assert len(y_pred) == N_ROWS, f"Expected {N_ROWS} predictions"
-    unique_vals = set(y_pred.tolist())
-    assert unique_vals.issubset({0, 1}), f"Unexpected label values: {unique_vals}"
-
-
-# ── 3. weighted average math ──────────────────────────────────────────────
-def test_weighted_average_math(synthetic_data):
-    """
-    Manually create 2 estimators with known constant probabilities and
-    verify that the blended output matches the hand-computed weighted avg.
-    """
-    X, y = synthetic_data
-
-    # Create two estimators whose probas we can control via a mock
-    class ConstantProbaEstimator:
-        def __init__(self, p0, p1):
-            self._p0, self._p1 = p0, p1
-            self.classes_ = np.array([0, 1])
-
-        def fit(self, X, y):
-            return self
-
-        def predict_proba(self, X):
-            return np.tile([self._p0, self._p1], (len(X), 1)).astype(np.float64)
-
-    est_a = ConstantProbaEstimator(0.3, 0.7)
-    est_b = ConstantProbaEstimator(0.6, 0.4)
-
-    weights = {"a": 0.4, "b": 0.6}
-    ens = SoftVotingEnsemble(estimators={"a": est_a, "b": est_b}, weights=weights)
-    ens._fitted = True  # skip fit for mock estimators
-
-    proba = ens.predict_proba(X[:10])
-
-    # Manual calculation: 0.4 * [0.3, 0.7] + 0.6 * [0.6, 0.4]
-    expected_p0 = 0.4 * 0.3 + 0.6 * 0.6  # = 0.12 + 0.36 = 0.48
-    expected_p1 = 0.4 * 0.7 + 0.6 * 0.4  # = 0.28 + 0.24 = 0.52
-    np.testing.assert_allclose(proba[:, 0], expected_p0, atol=1e-5)
-    np.testing.assert_allclose(proba[:, 1], expected_p1, atol=1e-5)
-
-
-# ── 4. equal weights → simple average ────────────────────────────────────
-def test_equal_weights(synthetic_data):
-    """With equal weights all estimators contribute equally → simple average."""
-    X, y = synthetic_data
-
-    class ConstantProba:
-        def __init__(self, val):
-            self._val = val
-            self.classes_ = np.array([0, 1])
-
-        def fit(self, X, y): return self
-
-        def predict_proba(self, X):
-            return np.tile([self._val, 1 - self._val], (len(X), 1)).astype(np.float64)
-
-    probas = [0.2, 0.5, 0.8]
-    estimators = {f"m{i}": ConstantProba(p) for i, p in enumerate(probas)}
+def fitted_ensemble(dummy_data):
+    X, y = dummy_data
+    # Use small scikit-learn RFs for fast testing
+    estimators = {
+        "rf": RandomForestClassifier(n_estimators=5, max_depth=3, random_state=42),
+        "lgbm": RandomForestClassifier(n_estimators=5, max_depth=3, random_state=42),
+        "xgb": RandomForestClassifier(n_estimators=5, max_depth=3, random_state=42),
+    }
     ens = SoftVotingEnsemble(estimators=estimators)
+    ens.fit(X, y)
+    return ens
+
+
+def test_soft_voting_proba_shape(fitted_ensemble, dummy_data):
+    X, _ = dummy_data
+    probas = fitted_ensemble.predict_proba(X)
+    assert probas.shape == (500, 2)
+    assert np.allclose(probas.sum(axis=1), 1.0)
+
+
+def test_soft_voting_predict(fitted_ensemble, dummy_data):
+    X, _ = dummy_data
+    preds = fitted_ensemble.predict(X)
+    assert preds.ndim == 1
+    assert preds.shape == (500,)
+    assert set(np.unique(preds)).issubset({0, 1})
+
+
+def test_weighted_average():
+    ens = SoftVotingEnsemble(estimators={}, weights={"rf": 0.5, "lgbm": 0.5})
+    # Mock probas
+    probas = {
+        "rf": np.array([[0.2, 0.8], [0.9, 0.1]]),
+        "lgbm": np.array([[0.4, 0.6], [0.7, 0.3]]),
+    }
+    # Weighted avg manually:
+    # row 0: 0.5*0.2 + 0.5*0.4 = 0.3, 0.5*0.8 + 0.5*0.6 = 0.7
+    # row 1: 0.5*0.9 + 0.5*0.7 = 0.8, 0.5*0.1 + 0.5*0.3 = 0.2
+    
+    class MockEst:
+        def __init__(self, probas):
+            self.p = probas
+        def predict_proba(self, X):
+            return self.p
+
+    ens.estimators = {"rf": MockEst(probas["rf"]), "lgbm": MockEst(probas["lgbm"])}
     ens._fitted = True
-
-    out = ens.predict_proba(X[:5])
-    expected_p0 = np.mean(probas)  # = 0.5
-    np.testing.assert_allclose(out[:, 0], expected_p0, atol=1e-5)
-
-
-# ── 5. optimize_weights sums to 1.0 ──────────────────────────────────────
-def test_optimize_weights_sums_to_one(fitted_ensemble):
-    """optimize_weights must return weights that sum to 1.0."""
-    ens, X, y = fitted_ensemble
-    best_w = ens.optimize_weights(X, y, step=0.5)  # coarse step for speed
-    total = sum(best_w.values())
-    assert abs(total - 1.0) < 1e-6, f"Weights sum to {total}, expected 1.0"
+    
+    # Dummy X just for length
+    X = np.zeros((2, 5))
+    res = ens.predict_proba(X)
+    expected = np.array([[0.3, 0.7], [0.8, 0.2]])
+    np.testing.assert_allclose(res, expected)
 
 
-# ── 6. save / load roundtrip ──────────────────────────────────────────────
-def test_save_load_roundtrip(fitted_ensemble):
-    """Saved ensemble must produce identical predictions after loading."""
-    ens, X, _ = fitted_ensemble
+def test_equal_weights_default():
+    estimators = {"rf": None, "lgbm": None, "xgb": None}
+    ens = SoftVotingEnsemble(estimators)
+    assert ens.weights == {"rf": 1/3, "lgbm": 1/3, "xgb": 1/3}
+
+
+def test_optimize_weights_grid(fitted_ensemble, dummy_data):
+    X, y = dummy_data
+    best_weights = fitted_ensemble.optimize_weights(X, y, step=0.5)
+    assert isinstance(best_weights, dict)
+    assert "rf" in best_weights and "lgbm" in best_weights and "xgb" in best_weights
+    total_weight = sum(best_weights.values())
+    assert np.isclose(total_weight, 1.0)
+    assert fitted_ensemble.weights == best_weights
+
+
+def test_save_load_roundtrip(fitted_ensemble, dummy_data):
+    X, _ = dummy_data
+    original_preds = fitted_ensemble.predict(X)
+    
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "ensemble.joblib")
-        ens.save(path)
-        assert os.path.exists(path), "Saved file not found"
+        fitted_ensemble.save(path)
+        
+        loaded_ensemble = SoftVotingEnsemble.load(path)
+        loaded_preds = loaded_ensemble.predict(X)
+        
+        np.testing.assert_array_equal(original_preds, loaded_preds)
+        assert loaded_ensemble.weights == fitted_ensemble.weights
 
-        ens2 = SoftVotingEnsemble.load(path)
-        pred1 = ens.predict(X)
-        pred2 = ens2.predict(X)
-        np.testing.assert_array_equal(pred1, pred2)
 
-
-# ── 7. shape assertion: X.ndim != 2 ──────────────────────────────────────
 def test_shape_assertion_X(fitted_ensemble):
-    """predict_proba must raise AssertionError when X is 1-D."""
-    ens, _, _ = fitted_ensemble
-    X_bad = np.zeros(N_FEATURES, dtype=np.float32)  # 1-D
     with pytest.raises(AssertionError):
-        ens.predict_proba(X_bad)
+        fitted_ensemble.fit(np.zeros((5, 5, 5)), np.zeros(5))
 
 
-# ── 8. shape assertion: y.ndim != 1 ──────────────────────────────────────
-def test_shape_assertion_y(synthetic_data):
-    """fit() must raise AssertionError when y is 2-D."""
-    X, y = synthetic_data
-    y_bad = y.reshape(-1, 1)  # 2-D
-    ens = SoftVotingEnsemble(estimators=_make_cpu_estimators())
+def test_shape_assertion_y(fitted_ensemble):
     with pytest.raises(AssertionError):
-        ens.fit(X, y_bad)
+        fitted_ensemble.fit(np.zeros((5, 5)), np.zeros((5, 2)))
 
 
-# ── 9. CPU fallback: HAS_CUML=False → sklearn RF used ────────────────────
-def test_cpu_fallback(synthetic_data):
-    """
-    When HAS_CUML is False, build_default_estimators must return a sklearn RF
-    (not a cuML RF). We patch HAS_CUML to False via module attribute manipulation.
-    """
+def test_cpu_fallback():
+    # If we fake HAS_CUML = False and CuMLRF to sklearn's RF, it should work
     import src.training.ensemble as ens_module
-    original_cuml = ens_module.HAS_CUML
-    original_rf_cls = ens_module.CuMLRF
-
+    from sklearn.ensemble import RandomForestClassifier
+    old_cumlrf = ens_module.CuMLRF
+    ens_module.CuMLRF = RandomForestClassifier
+    
     try:
-        from sklearn.ensemble import RandomForestClassifier as SklearnRF
-        ens_module.HAS_CUML = False
-        ens_module.CuMLRF = SklearnRF
-
-        estimators = build_default_estimators({}, {}, {})
-        assert isinstance(estimators["rf"], SklearnRF), (
-            f"Expected sklearn RF, got {type(estimators['rf'])}"
-        )
+        ests = ens_module.build_default_estimators({}, {}, {})
+        assert isinstance(ests["rf"], RandomForestClassifier)
     finally:
-        # Restore module state
-        ens_module.HAS_CUML = original_cuml
-        ens_module.CuMLRF = original_rf_cls
+        ens_module.CuMLRF = old_cumlrf

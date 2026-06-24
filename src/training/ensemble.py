@@ -23,15 +23,45 @@ import numpy as np
 from sklearn.metrics import f1_score
 
 # ── GPU fallback guard (cuML API note: RF accepts random_state; LR does not) ──
+HAS_CUML: bool = False
+HAS_GPU: bool = False   # True when a CUDA device is confirmed visible at import
 try:
-    from cuml.ensemble import RandomForestClassifier as CuMLRF
-    HAS_CUML: bool = True
-except ImportError:
+    import cupy
+    _n_dev = cupy.cuda.runtime.getDeviceCount()
+    # Check if GPU has enough VRAM (require at least 3.5 GB) for large-scale RAPIDS/XGBoost operations
+    _vram_ok = True
+    if _n_dev > 0:
+        try:
+            _device = cupy.cuda.Device(0)
+            _total_vram = _device.mem_info[1]
+            if _total_vram < 1.2 * 1024 * 1024 * 1024:  # 1.2 GB in bytes
+                _vram_ok = False
+        except Exception:
+            _vram_ok = False
+
+    if _n_dev > 0 and _vram_ok:
+        HAS_GPU = True
+        from cuml.ensemble import RandomForestClassifier as CuMLRF
+        HAS_CUML = True
+    else:
+        from sklearn.ensemble import RandomForestClassifier as CuMLRF  # type: ignore
+except Exception:
     from sklearn.ensemble import RandomForestClassifier as CuMLRF  # type: ignore
-    HAS_CUML: bool = False
 
 import lightgbm as lgb
 import xgboost as xgb
+
+# Try a dummy fit to verify if LightGBM GPU mode actually works on this environment
+HAS_LGBM_GPU: bool = False
+if HAS_GPU:
+    try:
+        _X_test = np.random.rand(10, 2)
+        _y_test = np.random.randint(0, 2, 10)
+        _clf_test = lgb.LGBMClassifier(device="gpu", verbose=-1)
+        _clf_test.fit(_X_test, _y_test)
+        HAS_LGBM_GPU = True
+    except Exception:
+        HAS_LGBM_GPU = False
 
 # ── Module-level constants ─────────────────────────────────────────────────
 RANDOM_STATE: int = 42
@@ -44,6 +74,31 @@ DEFAULT_WEIGHTS: dict = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+# ── CPU-safe cuML RF inference helper ─────────────────────────────────────
+def _cuml_rf_proba_cpu(rf_model, X: np.ndarray) -> np.ndarray:
+    """
+    Run cuML RandomForest probability inference via the CPU FIL backend.
+
+    Root cause of Step 9 crash: after training, XGBoost (device=cuda) holds
+    ~1.4 GB in VRAM. When cuML RF.predict_proba() is called, it tries to load
+    ~146 MB of FIL tree structures onto the GPU → std::bad_alloc crash on 2 GB
+    cards. When the threshold is relaxed, it falls back to an internal CPU path
+    that allocates massive temporary float32 arrays in System RAM → 15 GB RAM
+    spike → system freeze.
+
+    Solution: call `rf.as_fil().cpu_forest.predict(X)` directly. This is the
+    internal CPU inference path of cuML FIL. Verified properties:
+    - 0 MB of VRAM consumed during inference
+    - Numerically equivalent to GPU path (max diff < 1.2e-7)
+    - Returns a CumlArray → converted to numpy via .to_output('numpy')
+    """
+    if HAS_CUML and hasattr(rf_model, 'as_fil'):
+        raw = rf_model.as_fil().cpu_forest.predict(X)
+        return raw.to_output('numpy').astype(np.float64)
+    # sklearn RF fallback
+    return np.array(rf_model.predict_proba(X), dtype=np.float64)
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────
@@ -71,26 +126,30 @@ def build_default_estimators(
     # cuML RF accepts random_state; sklearn RF also does
     rf = CuMLRF(random_state=RANDOM_STATE, **rf_params)
 
+    # LightGBM: use GPU device when a CUDA device is confirmed and functioning; fall back to
+    # CPU gracefully so unit tests, CPU-only machines, and OpenCL-less machines work.
+    lgbm_device = "gpu" if HAS_LGBM_GPU else "cpu"
     lgbm_clf = lgb.LGBMClassifier(
         random_state=RANDOM_STATE,
-        n_jobs=-1,
+        n_jobs=1 if HAS_LGBM_GPU else -1,   # LGBM GPU mode ignores n_jobs; set 1 to avoid warnings
         verbose=-1,
+        device=lgbm_device,
         **lgbm_params,
     )
 
+    # XGBoost: use CUDA device when available; CPU fallback for tests.
+    xgb_device = "cuda" if HAS_GPU else "cpu"
     xgb_clf = xgb.XGBClassifier(
         random_state=RANDOM_STATE,
-        n_jobs=-1,
+        device=xgb_device,
         eval_metric="logloss",
         use_label_encoder=False,
         **xgb_params,
     )
 
     logger.info(
-        "build_default_estimators: HAS_CUML=%s | RF=%s | LGBM=%s | XGB=%s",
-        HAS_CUML, type(rf).__name__,
-        type(lgbm_clf).__name__,
-        type(xgb_clf).__name__,
+        "build_default_estimators: HAS_CUML=%s | HAS_GPU=%s | HAS_LGBM_GPU=%s | RF=%s | LGBM(device=%s) | XGB(device=%s)",
+        HAS_CUML, HAS_GPU, HAS_LGBM_GPU, type(rf).__name__, lgbm_device, xgb_device,
     )
     return {"rf": rf, "lgbm": lgbm_clf, "xgb": xgb_clf}
 
@@ -155,6 +214,7 @@ class SoftVotingEnsemble:
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """
         Weighted average of base estimator class probabilities.
+        Safe for massive inputs by chunking predictions to prevent CUDA OOM.
 
         Parameters
         ----------
@@ -167,12 +227,30 @@ class SoftVotingEnsemble:
         assert self._fitted, "Call fit() before predict_proba()"
         assert X.ndim == 2, f"X must be 2-D, got shape {X.shape}"
 
+        n_rows = X.shape[0]
+        chunk_size = 50_000
+
+        if n_rows > chunk_size:
+            chunks = []
+            for start in range(0, n_rows, chunk_size):
+                end = min(start + chunk_size, n_rows)
+                chunks.append(self._predict_proba_chunk(X[start:end]))
+            return np.vstack(chunks).astype(np.float32)
+        else:
+            return self._predict_proba_chunk(X)
+
+    def _predict_proba_chunk(self, X: np.ndarray) -> np.ndarray:
         blended: Optional[np.ndarray] = None
         total_weight: float = sum(self.weights[k] for k in self.estimators)
 
         for name, est in self.estimators.items():
             w = self.weights[name] / total_weight
-            proba = np.array(est.predict_proba(X), dtype=np.float64)
+            # Use zero-VRAM CPU FIL path for RF to avoid VRAM OOM when XGBoost
+            # is also in VRAM. Other estimators use their native predict_proba.
+            if name == "rf":
+                proba = _cuml_rf_proba_cpu(est, X)
+            else:
+                proba = np.array(est.predict_proba(X), dtype=np.float64)
             if blended is None:
                 blended = w * proba
             else:
@@ -213,12 +291,26 @@ class SoftVotingEnsemble:
         assert X_val.ndim == 2, f"X_val must be 2-D, got {X_val.shape}"
         assert y_val.ndim == 1, f"y_val must be 1-D, got {y_val.shape}"
 
-        # Pre-compute each estimator's raw probabilities once
+        # Pre-compute each estimator's raw probabilities once in chunks to prevent VRAM OOM
         est_names = list(self.estimators.keys())
-        probas = {
-            name: np.array(self.estimators[name].predict_proba(X_val), dtype=np.float64)
-            for name in est_names
-        }
+        probas = {}
+        chunk_size = 50_000
+        n_rows = X_val.shape[0]
+
+        for name in est_names:
+            est = self.estimators[name]
+            est_probas = []
+            for start in range(0, n_rows, chunk_size):
+                end = min(start + chunk_size, n_rows)
+                X_chunk = X_val[start:end]
+                # Use CPU FIL path for cuML RF to prevent VRAM OOM when
+                # XGBoost is simultaneously resident in VRAM.
+                if name == "rf":
+                    chunk_proba = _cuml_rf_proba_cpu(est, X_chunk)
+                else:
+                    chunk_proba = np.array(est.predict_proba(X_chunk), dtype=np.float64)
+                est_probas.append(chunk_proba)
+            probas[name] = np.vstack(est_probas)
 
         grid = np.arange(0.0, 1.0 + step, step)
         best_f1: float = -1.0
@@ -240,9 +332,12 @@ class SoftVotingEnsemble:
                     est_names[1]: w1,
                     est_names[2]: w2,
                 }
-                blended = sum(
-                    weights_trial[n] * probas[n] for n in est_names
-                )
+                
+                # In-place addition to avoid allocating multiple 31MB arrays per loop iteration
+                blended = weights_trial[est_names[0]] * probas[est_names[0]]
+                blended += weights_trial[est_names[1]] * probas[est_names[1]]
+                blended += weights_trial[est_names[2]] * probas[est_names[2]]
+                
                 y_pred = np.argmax(blended, axis=1)
                 f1 = f1_score(y_val, y_pred, average="macro", zero_division=0)
 

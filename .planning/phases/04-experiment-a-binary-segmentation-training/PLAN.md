@@ -15,6 +15,7 @@
 | Best Params | Both JSON (`data/models/rf_best_params.json`) and embedded in joblib | Human audit + self-contained loading |
 | Ensemble Weights | Grid search on weight simplex (step=0.1, ~165 combos) | Data-driven, deterministic, auditable |
 | Notebook | Full research document with Markdown prose + all 5 visualization types | Per discussion decisions D-11, D-12 |
+| Artifact Export | Save high-quality PNGs + raw CSV data for all visualizations | Authentic research-grade artifacts for supervisor review |
 
 ## Infrastructure Already Built (Phase 3 Outputs)
 
@@ -48,6 +49,8 @@ data/models/binary_ensemble.joblib
 data/models/rf_best_params.json
 data/models/lgbm_best_params.json
 data/models/xgb_best_params.json
+data/reports/08_inspection_plots/ (PNG graphic artifacts)
+data/reports/08_inspection_data/ (Raw CSV values used for plots)
 .planning/phases/04-experiment-a-binary-segmentation-training/DECISION.md (filled)
 ```
 
@@ -58,6 +61,7 @@ data/models/xgb_best_params.json
 3. Notebook `08_inspect_binary_ensemble.ipynb` executes end-to-end with all 5 required visualization types + Markdown prose.
 4. `pytest tests/test_ensemble.py` passes (CPU-only, <30s).
 5. DECISION.md filled with Fold 2 Macro-F1 scores for all 3 base models and the ensemble.
+6. Research-grade graphic artifacts (PNGs) and their raw underlying values (CSVs) for both training phase and Fold 2 evaluation are saved for supervisor review.
 
 ---
 *Plan updated: 2026-05-26 | Phase: 4 of 10 | Depends on: Phase 3 scaled matrices*
