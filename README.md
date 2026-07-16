@@ -746,7 +746,7 @@ The associated research manuscript is **unpublished** (or under review) and is *
 If you wish to use any part of this work or discuss collaboration, please contact:
 
 **Abdul Manan**  
-Email: [EMAIL_ADDRESS](mananbyte@gmail.com)
+Email: mananbyte@gmail.com
 
 <div align="center">
 
