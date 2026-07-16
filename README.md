@@ -722,6 +722,32 @@ The PanNuke dataset has its own license — please refer to the [official datase
 
 ---
 
+# Copyright Notice
+
+**© 2026 Your Name. All Rights Reserved.**
+
+This repository is made publicly available **solely for portfolio and evaluation purposes** to demonstrate my research and technical work.
+
+## Restrictions
+
+Unless prior written permission is obtained from the author:
+
+- ❌ Do not copy or reproduce any part of this repository.
+- ❌ Do not redistribute or republish the source code, documentation, figures, or research content.
+- ❌ Do not use this work, in whole or in part, in any publication, thesis, article, or commercial project.
+- ❌ Do not claim this work as your own.
+
+## Research Manuscript
+
+The associated research manuscript is **unpublished** (or under review) and is **not licensed for redistribution or publication**. The repository is intended only to showcase the project to recruiters, collaborators, and reviewers.
+
+## Contact
+
+If you wish to use any part of this work or discuss collaboration, please contact:
+
+**Abdul Manan**  
+Email: [EMAIL_ADDRESS](mananbyte@gmail.com)
+
 <div align="center">
 
 **Built with ❤️ for interpretable, memory-efficient medical image analysis**
